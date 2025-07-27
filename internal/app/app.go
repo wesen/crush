@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"os"
 	"sync"
 	"time"
 
@@ -15,6 +16,8 @@ import (
 	"github.com/charmbracelet/crush/internal/db"
 	"github.com/charmbracelet/crush/internal/format"
 	"github.com/charmbracelet/crush/internal/history"
+	"github.com/charmbracelet/crush/internal/hooks"
+	"github.com/charmbracelet/crush/internal/hooks/builtin/logging"
 	"github.com/charmbracelet/crush/internal/llm/agent"
 	"github.com/charmbracelet/crush/internal/log"
 	"github.com/charmbracelet/crush/internal/pubsub"
@@ -251,6 +254,13 @@ func (app *App) InitCoderAgent() error {
 	if coderAgentCfg.ID == "" {
 		return fmt.Errorf("coder agent configuration is missing")
 	}
+	
+	// Setup hooks manager
+	hooksMgr := hooks.New()
+	if os.Getenv("CRUSH_USE_LOG_HOOK") == "1" {
+		hooksMgr.Add(logging.New(slog.Default()))
+	}
+	
 	var err error
 	app.CoderAgent, err = agent.NewAgent(
 		coderAgentCfg,
@@ -259,6 +269,7 @@ func (app *App) InitCoderAgent() error {
 		app.Messages,
 		app.History,
 		app.LSPClients,
+		hooksMgr,
 	)
 	if err != nil {
 		slog.Error("Failed to create coder agent", "err", err)

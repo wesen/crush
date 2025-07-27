@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/csync"
 	"github.com/charmbracelet/crush/internal/history"
+	"github.com/charmbracelet/crush/internal/hooks"
 	"github.com/charmbracelet/crush/internal/llm/prompt"
 	"github.com/charmbracelet/crush/internal/llm/provider"
 	"github.com/charmbracelet/crush/internal/llm/tools"
@@ -79,6 +80,8 @@ type agent struct {
 	summarizeProviderID string
 
 	activeRequests sync.Map
+
+	hooks *hooks.Manager
 }
 
 var agentPromptMap = map[string]prompt.PromptID{
@@ -94,6 +97,7 @@ func NewAgent(
 	messages message.Service,
 	history history.Service,
 	lspClients map[string]*lsp.Client,
+	hooksMgr *hooks.Manager,
 ) (Service, error) {
 	ctx := context.Background()
 	cfg := config.Get()
@@ -104,7 +108,7 @@ func NewAgent(
 		if taskAgentCfg.ID == "" {
 			return nil, fmt.Errorf("task agent not found in config")
 		}
-		taskAgent, err := NewAgent(taskAgentCfg, permissions, sessions, messages, history, lspClients)
+		taskAgent, err := NewAgent(taskAgentCfg, permissions, sessions, messages, history, lspClients, hooksMgr)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create task agent: %w", err)
 		}
@@ -224,6 +228,7 @@ func NewAgent(
 		summarizeProviderID: string(smallModelProviderCfg.ID),
 		activeRequests:      sync.Map{},
 		tools:               csync.NewLazySlice(toolFn),
+		hooks:               hooksMgr,
 	}, nil
 }
 
@@ -446,6 +451,17 @@ func (a *agent) createUserMessage(ctx context.Context, sessionID, content string
 
 func (a *agent) streamAndHandleEvents(ctx context.Context, sessionID string, msgHistory []message.Message) (message.Message, *message.Message, error) {
 	ctx = context.WithValue(ctx, tools.SessionIDContextKey, sessionID)
+	
+	// Emit before LLM call hook
+	if a.hooks != nil {
+		a.hooks.EmitBeforeLLM(ctx, &hooks.LLMCallCtx{
+			SessionID: sessionID,
+			AgentID:   a.agentCfg.ID,
+			Model:     a.Model().ID,
+		})
+	}
+	
+	startTime := time.Now()
 	eventChan := a.provider.StreamResponse(ctx, msgHistory, slices.Collect(a.tools.Seq()))
 
 	assistantMsg, err := a.messages.Create(ctx, sessionID, message.CreateMessageParams{
@@ -463,7 +479,7 @@ func (a *agent) streamAndHandleEvents(ctx context.Context, sessionID string, msg
 
 	// Process each event in the stream.
 	for event := range eventChan {
-		if processErr := a.processEvent(ctx, sessionID, &assistantMsg, event); processErr != nil {
+		if processErr := a.processEvent(ctx, sessionID, &assistantMsg, event, startTime); processErr != nil {
 			if errors.Is(processErr, context.Canceled) {
 				a.finishMessage(context.Background(), &assistantMsg, message.FinishReasonCanceled, "Request cancelled", "")
 			} else {
@@ -519,12 +535,34 @@ func (a *agent) streamAndHandleEvents(ctx context.Context, sessionID string, msg
 			}
 			resultChan := make(chan toolExecResult, 1)
 
+			// Emit before tool call hook
+			if a.hooks != nil {
+				a.hooks.EmitBeforeTool(ctx, &hooks.ToolCallCtx{
+					SessionID: sessionID,
+					AgentID:   a.agentCfg.ID,
+					ToolName:  toolCall.Name,
+				})
+			}
+
 			go func() {
+				toolStartTime := time.Now()
 				response, err := tool.Run(ctx, tools.ToolCall{
 					ID:    toolCall.ID,
 					Name:  toolCall.Name,
 					Input: toolCall.Input,
 				})
+				
+				// Emit after tool result hook
+				if a.hooks != nil {
+					a.hooks.EmitAfterTool(ctx, &hooks.ToolResCtx{
+						SessionID: sessionID,
+						AgentID:   a.agentCfg.ID,
+						ToolName:  toolCall.Name,
+						Duration:  time.Since(toolStartTime),
+						Err:       err,
+					})
+				}
+				
 				resultChan <- toolExecResult{response: response, err: err}
 			}()
 
@@ -600,7 +638,7 @@ func (a *agent) finishMessage(ctx context.Context, msg *message.Message, finishR
 	_ = a.messages.Update(ctx, *msg)
 }
 
-func (a *agent) processEvent(ctx context.Context, sessionID string, assistantMsg *message.Message, event provider.ProviderEvent) error {
+func (a *agent) processEvent(ctx context.Context, sessionID string, assistantMsg *message.Message, event provider.ProviderEvent, startTime time.Time) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -640,6 +678,16 @@ func (a *agent) processEvent(ctx context.Context, sessionID string, assistantMsg
 		if err := a.messages.Update(ctx, *assistantMsg); err != nil {
 			return fmt.Errorf("failed to update message: %w", err)
 		}
+		
+		// Emit after LLM inference hook
+		if a.hooks != nil {
+			a.hooks.EmitAfterLLM(ctx, &hooks.LLMRespCtx{
+				SessionID: sessionID,
+				AgentID:   a.agentCfg.ID,
+				Duration:  time.Since(startTime),
+			})
+		}
+		
 		return a.TrackUsage(ctx, sessionID, a.Model(), event.Response.Usage)
 	}
 
