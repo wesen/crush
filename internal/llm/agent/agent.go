@@ -61,6 +61,7 @@ type Service interface {
 	IsBusy() bool
 	Summarize(ctx context.Context, sessionID string) error
 	UpdateModel() error
+	AddTransformHook(hook hooks.Hook) error
 }
 
 type agent struct {
@@ -80,7 +81,8 @@ type agent struct {
 
 	activeRequests *csync.Map[string, context.CancelFunc]
 
-	hooks *hooks.Manager
+	hooks            *hooks.Manager
+	transformManager *hooks.TransformManager
 }
 
 var agentPromptMap = map[string]prompt.PromptID{
@@ -216,6 +218,12 @@ func NewAgent(
 		return filteredTools
 	}
 
+	// Create service registry for transform hooks
+	serviceRegistry := hooks.NewServiceRegistry(messages, sessions)
+
+	// Create and initialize transform manager
+	transformManager := hooks.NewTransformManager(serviceRegistry)
+
 	return &agent{
 		Broker:              pubsub.NewBroker[AgentEvent](),
 		agentCfg:            agentCfg,
@@ -229,6 +237,7 @@ func NewAgent(
 		activeRequests:      csync.NewMap[string, context.CancelFunc](),
 		tools:               csync.NewLazySlice(toolFn),
 		hooks:               hooksMgr,
+		transformManager:    transformManager,
 	}, nil
 }
 
@@ -450,7 +459,7 @@ func (a *agent) createUserMessage(ctx context.Context, sessionID, content string
 
 func (a *agent) streamAndHandleEvents(ctx context.Context, sessionID string, msgHistory []message.Message) (message.Message, *message.Message, error) {
 	ctx = context.WithValue(ctx, tools.SessionIDContextKey, sessionID)
-	
+
 	// Emit before LLM call hook
 	if a.hooks != nil {
 		a.hooks.EmitBeforeLLM(ctx, &hooks.LLMCallCtx{
@@ -459,7 +468,7 @@ func (a *agent) streamAndHandleEvents(ctx context.Context, sessionID string, msg
 			Model:     a.Model().ID,
 		})
 	}
-	
+
 	startTime := time.Now()
 	eventChan := a.provider.StreamResponse(ctx, msgHistory, slices.Collect(a.tools.Seq()))
 
@@ -550,7 +559,7 @@ func (a *agent) streamAndHandleEvents(ctx context.Context, sessionID string, msg
 					Name:  toolCall.Name,
 					Input: toolCall.Input,
 				})
-				
+
 				// Emit after tool result hook
 				if a.hooks != nil {
 					a.hooks.EmitAfterTool(ctx, &hooks.ToolResCtx{
@@ -561,7 +570,18 @@ func (a *agent) streamAndHandleEvents(ctx context.Context, sessionID string, msg
 						Err:       err,
 					})
 				}
-				
+
+				// Execute transform hooks with enhanced context
+				if a.transformManager != nil {
+					// Convert message.ToolCall to tools.ToolCall
+					convertedToolCall := tools.ToolCall{
+						ID:    toolCall.ID,
+						Name:  toolCall.Name,
+						Input: toolCall.Input,
+					}
+					a.handleTransformAfterTool(ctx, sessionID, convertedToolCall, response, time.Since(toolStartTime), err)
+				}
+
 				resultChan <- toolExecResult{response: response, err: err}
 			}()
 
@@ -677,7 +697,7 @@ func (a *agent) processEvent(ctx context.Context, sessionID string, assistantMsg
 		if err := a.messages.Update(ctx, *assistantMsg); err != nil {
 			return fmt.Errorf("failed to update message: %w", err)
 		}
-		
+
 		// Emit after LLM inference hook
 		if a.hooks != nil {
 			a.hooks.EmitAfterLLM(ctx, &hooks.LLMRespCtx{
@@ -686,7 +706,7 @@ func (a *agent) processEvent(ctx context.Context, sessionID string, assistantMsg
 				Duration:  time.Since(startTime),
 			})
 		}
-		
+
 		return a.TrackUsage(ctx, sessionID, a.Model(), event.Response.Usage)
 	}
 
@@ -1000,4 +1020,47 @@ func (a *agent) UpdateModel() error {
 	}
 
 	return nil
+}
+
+// handleTransformAfterTool executes transform hooks with enhanced session context
+func (a *agent) handleTransformAfterTool(ctx context.Context, sessionID string, toolCall tools.ToolCall, result tools.ToolResponse, duration time.Duration, err error) {
+	// Get session data for enhanced context
+	sess, sessionErr := a.sessions.Get(ctx, sessionID)
+	if sessionErr != nil {
+		slog.Warn("Failed to get session for transform hook context", "error", sessionErr)
+		sess = session.Session{ID: sessionID} // Minimal fallback
+	}
+
+	// Get messages for enhanced context
+	messages, msgErr := a.messages.List(ctx, sessionID)
+	if msgErr != nil {
+		slog.Warn("Failed to get messages for transform hook context", "error", msgErr)
+		messages = []message.Message{} // Empty fallback
+	}
+
+	// Build enhanced context for transform hooks
+	transformCtx := &hooks.ToolTransformContext{
+		SessionHookContext: &hooks.SessionHookContext{
+			Session:   &sess,
+			Messages:  messages,
+			SessionID: sessionID,
+			AgentID:   a.agentCfg.ID,
+			Metadata:  make(map[string]any),
+		},
+		ToolCall:   toolCall,
+		ToolResult: &result,
+		ToolName:   toolCall.Name,
+		Duration:   duration,
+		Err:        err,
+	}
+
+	// Execute transform hooks
+	if transformErr := a.transformManager.ExecuteTransformAfterTool(ctx, transformCtx); transformErr != nil {
+		slog.Error("Transform hook execution failed", "error", transformErr)
+	}
+}
+
+// AddTransformHook adds a transform hook to the transform manager
+func (a *agent) AddTransformHook(hook hooks.Hook) error {
+	return a.transformManager.Add(hook)
 }

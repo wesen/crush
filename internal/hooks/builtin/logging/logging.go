@@ -16,17 +16,17 @@ type LoggingHook struct {
 // New creates a new logging hook that writes to a file.
 func New(defaultLogger *slog.Logger) *LoggingHook {
 	// Create or append to hooks.log file
-	file, err := os.OpenFile("hooks.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	file, err := os.OpenFile("hooks.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		// Fallback to default logger if file creation fails
 		return &LoggingHook{logger: defaultLogger}
 	}
-	
+
 	// Create a new logger that writes to the file
 	fileLogger := slog.New(slog.NewJSONHandler(file, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
 	}))
-	
+
 	return &LoggingHook{
 		logger: fileLogger,
 	}
