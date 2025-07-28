@@ -1,0 +1,47 @@
+{
+  "hooks": {
+    "circuit_breaker": {
+      "failure_threshold": 5,
+      "timeout": 10000,
+      "recovery_timeout": 60000,
+      "half_open_max_calls": 3,
+      "success_threshold": 2
+    },
+    "per_hook_config": {
+      "critical-hook": {
+        "failure_threshold": 2,
+        "timeout": 5000,
+        "recovery_timeout": 30000,
+        "half_open_max_calls": 2,
+        "success_threshold": 1
+      },
+      "logging-hook": {
+        "failure_threshold": 10,
+        "timeout": 15000,
+        "recovery_timeout": 120000,
+        "half_open_max_calls": 5,
+        "success_threshold": 3
+      },
+      "transform-hook": {
+        "failure_threshold": 3,
+        "timeout": 8000,
+        "recovery_timeout": 45000,
+        "half_open_max_calls": 2,
+        "success_threshold": 2
+      }
+    },
+    "plugin_dirs": [
+      "./hooks/plugins"
+    ],
+    "plugins": {
+      "example-plugin": {
+        "path": "./hooks/plugins/example.so",
+        "config": {
+          "enabled": true,
+          "debug": false
+        },
+        "disabled": false
+      }
+    }
+  }
+}

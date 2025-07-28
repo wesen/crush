@@ -22,13 +22,26 @@ import (
 	"github.com/charmbracelet/crush/internal/hooks/builtin/magicmessage"
 	"github.com/charmbracelet/crush/internal/llm/agent"
 	"github.com/charmbracelet/crush/internal/log"
-	"github.com/charmbracelet/crush/internal/pubsub"
-
 	"github.com/charmbracelet/crush/internal/lsp"
 	"github.com/charmbracelet/crush/internal/message"
 	"github.com/charmbracelet/crush/internal/permission"
+	"github.com/charmbracelet/crush/internal/pubsub"
 	"github.com/charmbracelet/crush/internal/session"
 )
+
+// serviceRegistry implements hooks.ServiceRegistry
+type serviceRegistry struct {
+	messageService message.Service
+	sessionService session.Service
+}
+
+func (sr *serviceRegistry) MessageService() message.Service {
+	return sr.messageService
+}
+
+func (sr *serviceRegistry) SessionService() session.Service {
+	return sr.sessionService
+}
 
 type App struct {
 	Sessions    session.Service
@@ -259,10 +272,61 @@ func (app *App) InitCoderAgent() error {
 		return fmt.Errorf("coder agent configuration is missing")
 	}
 
-	// Setup hooks manager
-	hooksMgr := hooks.New()
+	// Setup hooks manager with circuit breaker configuration
+	var hooksMgr *hooks.Manager
+	var transformMgr *hooks.TransformManager
+	serviceReg := &serviceRegistry{
+		messageService: app.Messages,
+		sessionService: app.Sessions,
+	}
+
+	if app.config.Hooks != nil && app.config.Hooks.CircuitBreaker != nil {
+		defaultConfig, perHookConfig := app.convertCircuitBreakerConfig()
+		hooksMgr = hooks.NewWithCircuitBreakerConfig(defaultConfig, perHookConfig)
+		transformMgr = hooks.NewTransformManagerWithCircuitBreakerConfig(serviceReg, defaultConfig, perHookConfig)
+		slog.Info("Hook managers initialized with circuit breaker configuration",
+			"default_config", defaultConfig,
+			"per_hook_configs", len(perHookConfig))
+	} else {
+		hooksMgr = hooks.New()
+		transformMgr = hooks.NewTransformManager(serviceReg)
+		slog.Info("Hook managers initialized with default circuit breaker configuration")
+	}
+
 	if os.Getenv("CRUSH_USE_LOG_HOOK") == "1" {
 		hooksMgr.Add(logging.New(slog.Default()))
+	}
+
+	// Setup plugin manager and load plugins
+	pluginMgr := hooks.NewPluginManager(transformMgr, hooksMgr, &serviceRegistry{
+		messageService: app.Messages,
+		sessionService: app.Sessions,
+	}, slog.Default())
+
+	// Load plugins from configuration
+	if app.config.Hooks != nil {
+		var pluginDirs []string
+		var pluginConfigs map[string]interface{}
+
+		if app.config.Hooks.PluginDirs != nil {
+			pluginDirs = app.config.Hooks.PluginDirs
+		}
+
+		if app.config.Hooks.Plugins != nil {
+			pluginConfigs = make(map[string]interface{})
+			for name, config := range app.config.Hooks.Plugins {
+				pluginConfigs[name] = map[string]interface{}{
+					"path":     config.Path,
+					"config":   config.Config,
+					"disabled": config.Disabled,
+				}
+			}
+		}
+
+		if err := pluginMgr.LoadPluginsFromConfig(pluginDirs, pluginConfigs); err != nil {
+			slog.Error("Failed to load plugins", "error", err)
+			// Don't fail completely - continue without plugins
+		}
 	}
 
 	var err error
@@ -280,7 +344,15 @@ func (app *App) InitCoderAgent() error {
 		return err
 	}
 
-	// Register transform hooks
+	// Register loaded plugin hooks with agent
+	for _, hook := range pluginMgr.GetLoadedHooks() {
+		if err := app.CoderAgent.AddTransformHook(hook); err != nil {
+			slog.Error("Failed to add plugin transform hook", "hook", hook.Info().Name, "err", err)
+			// Continue with other hooks
+		}
+	}
+
+	// Register built-in transform hooks
 	if os.Getenv("CRUSH_USE_MAGIC_MESSAGE_HOOK") == "1" {
 		magicHook := magicmessage.New()
 		if err := app.CoderAgent.AddTransformHook(magicHook); err != nil {
@@ -291,6 +363,71 @@ func (app *App) InitCoderAgent() error {
 
 	setupSubscriber(app.eventsCtx, app.serviceEventsWG, "coderAgent", app.CoderAgent.Subscribe, app.events)
 	return nil
+}
+
+// convertCircuitBreakerConfig converts app config to hooks circuit breaker config
+func (app *App) convertCircuitBreakerConfig() (hooks.CircuitBreakerConfig, map[string]hooks.CircuitBreakerConfig) {
+	// Convert default config to circuit breaker config
+	defaultConfig := hooks.CircuitBreakerConfig{
+		FailureThreshold:     app.config.Hooks.CircuitBreaker.FailureThreshold,
+		Timeout:              app.config.Hooks.CircuitBreaker.Timeout,
+		RecoveryTimeout:      app.config.Hooks.CircuitBreaker.RecoveryTimeout,
+		HalfOpenMaxCalls:     app.config.Hooks.CircuitBreaker.HalfOpenMaxCalls,
+		SuccessThreshold:     app.config.Hooks.CircuitBreaker.SuccessThreshold,
+	}
+	
+	// Apply defaults for zero values
+	defaults := hooks.DefaultCircuitBreakerConfig()
+	if defaultConfig.FailureThreshold == 0 {
+		defaultConfig.FailureThreshold = defaults.FailureThreshold
+	}
+	if defaultConfig.Timeout == 0 {
+		defaultConfig.Timeout = defaults.Timeout
+	}
+	if defaultConfig.RecoveryTimeout == 0 {
+		defaultConfig.RecoveryTimeout = defaults.RecoveryTimeout
+	}
+	if defaultConfig.HalfOpenMaxCalls == 0 {
+		defaultConfig.HalfOpenMaxCalls = defaults.HalfOpenMaxCalls
+	}
+	if defaultConfig.SuccessThreshold == 0 {
+		defaultConfig.SuccessThreshold = defaults.SuccessThreshold
+	}
+
+	// Convert per-hook configs
+	perHookConfig := make(map[string]hooks.CircuitBreakerConfig)
+	if app.config.Hooks.PerHookConfig != nil {
+		for hookName, config := range app.config.Hooks.PerHookConfig {
+			hookConfig := hooks.CircuitBreakerConfig{
+				FailureThreshold:     config.FailureThreshold,
+				Timeout:              config.Timeout,
+				RecoveryTimeout:      config.RecoveryTimeout,
+				HalfOpenMaxCalls:     config.HalfOpenMaxCalls,
+				SuccessThreshold:     config.SuccessThreshold,
+			}
+			
+			// Apply defaults for zero values (use defaultConfig as base)
+			if hookConfig.FailureThreshold == 0 {
+				hookConfig.FailureThreshold = defaultConfig.FailureThreshold
+			}
+			if hookConfig.Timeout == 0 {
+				hookConfig.Timeout = defaultConfig.Timeout
+			}
+			if hookConfig.RecoveryTimeout == 0 {
+				hookConfig.RecoveryTimeout = defaultConfig.RecoveryTimeout
+			}
+			if hookConfig.HalfOpenMaxCalls == 0 {
+				hookConfig.HalfOpenMaxCalls = defaultConfig.HalfOpenMaxCalls
+			}
+			if hookConfig.SuccessThreshold == 0 {
+				hookConfig.SuccessThreshold = defaultConfig.SuccessThreshold
+			}
+			
+			perHookConfig[hookName] = hookConfig
+		}
+	}
+
+	return defaultConfig, perHookConfig
 }
 
 // Subscribe sends events to the TUI as tea.Msgs.

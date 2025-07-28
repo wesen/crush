@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "plugin_dirs": [
+      "./examples/test_hook"
+    ],
+    "plugins": {
+      "test_hook": {
+        "path": "./examples/test_hook/test_hook.so",
+        "config": {
+          "message_prefix": "Custom: "
+        },
+        "disabled": false
+      }
+    }
+  }
+}

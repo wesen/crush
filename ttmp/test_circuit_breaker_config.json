@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "plugins": {
+      "failing_plugin": {
+        "path": "ttmp/failing_plugin.so"
+      }
+    },
+    "circuit_breaker": {
+      "failure_threshold": 2,
+      "timeout": 1000,
+      "recovery_timeout": 5000
+    }
+  }
+}
