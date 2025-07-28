@@ -166,6 +166,51 @@ type LSP struct {
 	LSP  LSPConfig `json:"lsp"`
 }
 
+// HookPluginConfig defines configuration for Go hook plugins
+type HookPluginConfig struct {
+	Path     string                 `json:"path"`              // Path to .so file
+	Config   map[string]interface{} `json:"config,omitempty"`  // Plugin-specific configuration
+	Disabled bool                   `json:"disabled,omitempty"`
+}
+
+type HookPlugins map[string]HookPluginConfig
+
+type HookPlugin struct {
+	Name       string           `json:"name"`
+	PluginConf HookPluginConfig `json:"plugin"`
+}
+
+func (h HookPlugins) Sorted() []HookPlugin {
+	sorted := make([]HookPlugin, 0, len(h))
+	for k, v := range h {
+		sorted = append(sorted, HookPlugin{
+			Name:       k,
+			PluginConf: v,
+		})
+	}
+	slices.SortFunc(sorted, func(a, b HookPlugin) int {
+		return strings.Compare(a.Name, b.Name)
+	})
+	return sorted
+}
+
+// HookCircuitBreakerConfig defines circuit breaker configuration for hooks
+type HookCircuitBreakerConfig struct {
+	FailureThreshold     int `json:"failure_threshold,omitempty"`
+	Timeout              int `json:"timeout,omitempty"`
+	RecoveryTimeout      int `json:"recovery_timeout,omitempty"`
+	HalfOpenMaxCalls     int `json:"half_open_max_calls,omitempty"`
+	SuccessThreshold     int `json:"success_threshold,omitempty"`
+}
+
+// HooksConfig defines hook system configuration
+type HooksConfig struct {
+	PluginDirs     []string                             `json:"plugin_dirs,omitempty"`     // Directories to scan for plugins
+	Plugins        HookPlugins                          `json:"plugins,omitempty"`         // Individually configured plugins
+	CircuitBreaker *HookCircuitBreakerConfig            `json:"circuit_breaker,omitempty"` // Default circuit breaker config
+	PerHookConfig  map[string]HookCircuitBreakerConfig  `json:"per_hook_config,omitempty"` // Per-hook circuit breaker config
+}
+
 func (l LSPs) Sorted() []LSP {
 	sorted := make([]LSP, 0, len(l))
 	for k, v := range l {
@@ -249,6 +294,8 @@ type Config struct {
 	MCP MCPs `json:"mcp,omitempty"`
 
 	LSP LSPs `json:"lsp,omitempty"`
+
+	Hooks *HooksConfig `json:"hooks,omitempty"`
 
 	Options *Options `json:"options,omitempty"`
 

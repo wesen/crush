@@ -1,0 +1,31 @@
+{
+  "hooks": {
+    "enabled": true,
+    "plugins": [
+      {
+        "path": "ttmp/test_plugin.so",
+        "enabled": true
+      }
+    ],
+    "circuit_breaker": {
+      "failure_threshold": 3,
+      "timeout_ms": 5000,
+      "recovery_timeout_ms": 30000
+    },
+    "builtin": {
+      "logging": {
+        "enabled": true
+      },
+      "magic_message": {
+        "enabled": true,
+        "config": {
+          "magic_words": ["ALAKAZAM", "PRESTO", "ABRACADABRA"]
+        }
+      }
+    }
+  },
+  "debug": {
+    "enabled": true,
+    "log_level": "info"
+  }
+}

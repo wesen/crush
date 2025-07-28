@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "plugins": {
+      "test_plugin": {
+        "path": "ttmp/test_plugin.so",
+        "config": {
+          "log_level": "info"
+        }
+      }
+    },
+    "circuit_breaker": {
+      "failure_threshold": 3,
+      "timeout": 5000,
+      "recovery_timeout": 30000
+    }
+  }
+}

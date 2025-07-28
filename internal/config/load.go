@@ -280,6 +280,12 @@ func (c *Config) setDefaults(workingDir string) {
 	if c.LSP == nil {
 		c.LSP = make(map[string]LSPConfig)
 	}
+	if c.Hooks == nil {
+		c.Hooks = &HooksConfig{}
+	}
+	if c.Hooks.Plugins == nil {
+		c.Hooks.Plugins = make(map[string]HookPluginConfig)
+	}
 
 	// Add the default context paths if they are not already present
 	c.Options.ContextPaths = append(defaultContextPaths, c.Options.ContextPaths...)
