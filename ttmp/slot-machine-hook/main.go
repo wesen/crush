@@ -46,14 +46,8 @@ func (s *SlotMachineHook) Initialize(config map[string]interface{}, services hoo
 			}
 		}
 	}
-	
-	return nil
-}
 
-// TransformSession implements TransformSessionHook to get session-level access
-func (s *SlotMachineHook) TransformSession(ctx context.Context, sess *hooks.Session) (hooks.TransformResult[hooks.Session], error) {
-	// This hook doesn't modify the session directly, but needs access for message injection
-	return hooks.NoChange[hooks.Session](), nil
+	return nil
 }
 
 // TransformAfterTool implements TransformToolHook for the trigger event
@@ -61,21 +55,21 @@ func (s *SlotMachineHook) TransformAfterTool(ctx context.Context, resultCtx *hoo
 	if !s.enabled {
 		return hooks.NoChange[hooks.ToolTransformContext](), nil
 	}
-	
+
 	// Skip if tool execution failed
 	if resultCtx.Err != nil {
 		return hooks.NoChange[hooks.ToolTransformContext](), nil
 	}
-	
+
 	// Generate random winning amount
 	winAmount := s.winAmounts[rand.Intn(len(s.winAmounts))]
-	
+
 	// Create fun slot machine message
 	slotEmojis := []string{"🍒", "🍋", "🍊", "🍇", "⭐", "💎", "🔔", "💰"}
 	emoji1 := slotEmojis[rand.Intn(len(slotEmojis))]
 	emoji2 := slotEmojis[rand.Intn(len(slotEmojis))]
 	emoji3 := slotEmojis[rand.Intn(len(slotEmojis))]
-	
+
 	var message string
 	if winAmount >= 1000 {
 		message = fmt.Sprintf("🎰 JACKPOT! %s%s%s You won $%d at the slot machine! 💰💰💰", emoji1, emoji2, emoji3, winAmount)
@@ -84,7 +78,7 @@ func (s *SlotMachineHook) TransformAfterTool(ctx context.Context, resultCtx *hoo
 	} else {
 		message = fmt.Sprintf("🎰 %s%s%s You won $%d at the slot machine! 🎲", emoji1, emoji2, emoji3, winAmount)
 	}
-	
+
 	// Inject the message into the session
 	_, err := s.messageService.Create(ctx, resultCtx.SessionID, hooks.CreateMessageParams{
 		Role: hooks.System,
@@ -94,7 +88,7 @@ func (s *SlotMachineHook) TransformAfterTool(ctx context.Context, resultCtx *hoo
 		Model:    "hook-system",
 		Provider: "slot-machine-hook",
 	})
-	
+
 	if err != nil {
 		return hooks.TransformResult[hooks.ToolTransformContext]{}, fmt.Errorf("failed to inject slot machine message: %w", err)
 	}
@@ -107,11 +101,10 @@ func (s *SlotMachineHook) TransformAfterTool(ctx context.Context, resultCtx *hoo
 func NewHook() hooks.Hook {
 	// Seed random number generator
 	rand.Seed(time.Now().UnixNano())
-	
+
 	return &SlotMachineHook{}
 }
 
 // Ensure we implement the correct interfaces
 var _ hooks.HookInitializer = (*SlotMachineHook)(nil)
-var _ hooks.TransformSessionHook = (*SlotMachineHook)(nil)
 var _ hooks.TransformToolHook = (*SlotMachineHook)(nil)

@@ -16,7 +16,7 @@ type TestPlugin struct {
 func (p *TestPlugin) Info() hooks.HookInfo {
 	return hooks.HookInfo{
 		Name:        "test_plugin",
-		Version:     "1.0.0", 
+		Version:     "1.0.0",
 		Description: "Simple test plugin for end-to-end testing",
 	}
 }
@@ -30,7 +30,7 @@ func (p *TestPlugin) Initialize(config map[string]interface{}, services hooks.Se
 
 // BeforeLLMCall logs before LLM calls
 func (p *TestPlugin) BeforeLLMCall(ctx context.Context, c *hooks.LLMCallCtx) {
-	p.logger.Info("test_plugin: before LLM call", 
+	p.logger.Info("test_plugin: before LLM call",
 		"session_id", c.SessionID,
 		"model", c.Model)
 }
@@ -38,7 +38,7 @@ func (p *TestPlugin) BeforeLLMCall(ctx context.Context, c *hooks.LLMCallCtx) {
 // AfterLLMInference logs after LLM inference
 func (p *TestPlugin) AfterLLMInference(ctx context.Context, r *hooks.LLMRespCtx) {
 	p.logger.Info("test_plugin: after LLM inference",
-		"session_id", r.SessionID, 
+		"session_id", r.SessionID,
 		"duration", r.Duration)
 }
 

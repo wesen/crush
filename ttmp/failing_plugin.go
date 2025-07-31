@@ -16,7 +16,7 @@ type FailingPlugin struct {
 func (p *FailingPlugin) Info() hooks.HookInfo {
 	return hooks.HookInfo{
 		Name:        "failing_plugin",
-		Version:     "1.0.0", 
+		Version:     "1.0.0",
 		Description: "Plugin that deliberately fails to test circuit breaker",
 	}
 }

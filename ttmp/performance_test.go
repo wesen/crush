@@ -11,7 +11,7 @@ import (
 func BenchmarkSimpleHook(b *testing.B) {
 	hook := &SimpleHook{}
 	ctx := context.Background()
-	
+
 	callCtx := &hooks.LLMCallCtx{
 		SessionID: "test-session",
 		AgentID:   "test-agent",
@@ -29,11 +29,11 @@ func BenchmarkHookManager(b *testing.B) {
 	manager := hooks.New()
 	hook := &SimpleHook{}
 	manager.Add(hook)
-	
+
 	ctx := context.Background()
 	callCtx := &hooks.LLMCallCtx{
 		SessionID: "test-session",
-		AgentID:   "test-agent", 
+		AgentID:   "test-agent",
 		Model:     "test-model",
 	}
 
